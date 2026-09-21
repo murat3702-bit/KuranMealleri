@@ -18,9 +18,6 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Gradle Yetkisi Ver
-      run: chmod +x gradlew
-
     - name: APK Oluştur (Build)
       run: gradle assembleDebug
 
