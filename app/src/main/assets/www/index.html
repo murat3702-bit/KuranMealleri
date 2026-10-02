@@ -407,6 +407,7 @@ ADM.ver=ADM.ver||{};ADM.ctr=ADM.ctr||[];
 ADM.headFont=ADM.headFont||{};
 ADM.okuFont=ADM.okuFont||{};
 ADM.fnFont=ADM.fnFont||{};
+ADM.bios=ADM.bios||{};
 let admHad=false;try{admHad=localStorage.getItem('km1:adm')!==null}catch(e){}
 if(!admHad)ADM.pin='5e8596fe68141442e26f27b8e5b728b1022b57965a9d0fefd03aa2d0371d4bcc';
 function saveAdm(){try{localStorage.setItem('km1:adm',JSON.stringify(ADM));mem.adm=ADM;return true}catch(e){mem.adm=ADM;toast('Depolama dolu, kaydedilemedi');return false}}
@@ -582,9 +583,70 @@ async function renderHome(){
     if($('#vodt'))$('#vodt').innerHTML='“'+vtext(c?c[2]:'',S.tr)+'”';
   }catch(e){if($('#vodt'))$('#vodt').textContent='Veri yüklenemedi.'}
 }
+
+/* ===== Yazar Biyografileri =====
+   Uygulama çevrimdışı çalışır, sunucu yoktur; bu yüzden "API" yerel bir veri katmanıdır ve
+   REST uç noktalarını birebir yansıtır:
+     GET  /authors        -> BioAPI.list()
+     GET  /authors/:id    -> BioAPI.get(id)
+     POST /authors        -> BioAPI.create({name,text,id?})
+     PUT  /authors/:id    -> BioAPI.update(id,{name,text})
+   Okuma herkese açıktır (meal bilgi kartında gösterilir); oluşturma ve güncelleme yalnızca
+   yönetici paneli (PIN) açıkken yapılabilir. Silme bilinçli olarak tanımlanmadı. */
+const BIO_MAX_NAME=120,BIO_MAX_TEXT=20000;
+const BioAPI=(()=>{
+  const store=()=>(ADM.bios=ADM.bios&&typeof ADM.bios==='object'?ADM.bios:{});
+  const needAdmin=()=>{if(!$('#admin').classList.contains('on'))throw new Error('Bu işlem için yönetici yetkisi gerekli')};
+  const clean=(d)=>{
+    const name=String(d&&d.name||'').trim().replace(/\s+/g,' '),text=String(d&&d.text||'').replace(/\r\n?/g,'\n').trim();
+    if(!name)throw new Error('Yazar adı gerekli');
+    if(name.length>BIO_MAX_NAME)throw new Error('Yazar adı en fazla '+BIO_MAX_NAME+' karakter olabilir');
+    if(text.length>BIO_MAX_TEXT)throw new Error('Biyografi en fazla '+BIO_MAX_TEXT+' karakter olabilir');
+    return {name,text};
+  };
+  const row=(id,name,b,linked)=>({id,name:(b&&b.name)||name,hasBio:!!(b&&b.text&&b.text.trim()),linked,updatedAt:b?b.ts:null});
+  return {
+    list(){
+      const st=store(),rows=TRS.map(t=>row(t.id,t.name,st[t.id],true));
+      Object.values(st).filter(b=>!TRM[b.id]).forEach(b=>rows.push(row(b.id,b.name,b,false)));
+      return rows;
+    },
+    get(id){
+      const b=store()[id],t=TRM[id];
+      if(!b&&!t)return null;
+      return {id,name:b?b.name:t.name,text:b?b.text:'',linked:!!t,exists:!!b,updatedAt:b?b.ts:null,hint:t?(t.desc||''):''};
+    },
+    create(d){
+      needAdmin();const v=clean(d),st=store();
+      let id=d&&d.id;
+      if(id){if(!TRM[id])throw new Error('Bağlanacak meal bulunamadı');if(st[id])throw new Error('Bu yazar için biyografi zaten var, güncelleyin')}
+      else{
+        if(Object.values(st).some(b=>!TRM[b.id]&&b.name.toLowerCase()===v.name.toLowerCase()))throw new Error('Bu adla bir yazar zaten var');
+        id='a'+Date.now().toString(36);
+      }
+      st[id]={id,name:v.name,text:v.text,ts:Date.now()};
+      if(!saveAdm()){delete st[id];throw new Error('Kaydedilemedi')}
+      return this.get(id);
+    },
+    update(id,d){
+      needAdmin();const st=store();
+      if(!st[id])throw new Error('Kayıt bulunamadı');
+      const v=clean(d),old=st[id];
+      st[id]={id,name:v.name,text:v.text,ts:Date.now()};
+      if(!saveAdm()){st[id]=old;throw new Error('Kaydedilemedi')}
+      return this.get(id);
+    }
+  };
+})();
+/* Biçim: boş satır = paragraf, "## " = ara başlık, **kalın**, *italik*. Her şey önce kaçışlanır. */
+function bioToHtml(t){
+  const inl=x=>esc(x).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>');
+  return String(t||'').split(/\n{2,}/).map(b=>b.trim()).filter(Boolean).map(b=>
+    /^##\s+/.test(b)?`<h3>${inl(b.replace(/^##\s+/,''))}</h3>`:`<p>${inl(b).replace(/\n/g,'<br>')}</p>`).join('');
+}
 function openTrInfo(id){
   const t=TRM[id];
-  openSheet(esc(t.name),`<div class="opts" style="margin-bottom:14px"><button class="btn sm" id="ti-use">${ico('check',16)} Bu mealle oku</button></div>${t.bio?`<div class="bio">${t.bio}</div>`:`<div class="bio"><p>${esc(t.desc)}</p></div>`}`,
+  openSheet(esc(t.name),`<div class="opts" style="margin-bottom:14px"><button class="btn sm" id="ti-use">${ico('check',16)} Bu mealle oku</button></div>${(ADM.bios[id]&&ADM.bios[id].text.trim())?`<div class="bio">${bioToHtml(ADM.bios[id].text)}</div>`:t.bio?`<div class="bio">${t.bio}</div>`:`<div class="bio"><p>${esc(t.desc)}</p></div>`}`,
     b=>{$('#ti-use').onclick=()=>{Prefs.setActiveAuthorId(id);closeSheet();toast('Varsayılan meal: '+t.short);renderHome()}});
 }
 function openFeedback(){
@@ -1169,7 +1231,7 @@ function pickImage(cb){
   };
   inp.click();
 }
-const AT={pin:'Yönetici paneli',menu:'Yönetici paneli',home:'Ana sayfa içeriği',arts:'Makaleler',artEdit:'Makale',ver:'Meal ayetleri',verEdit:'Ayet düzenle',ctr:'Yeni meal ekle',headf:'Konu Başlıkları',oku:'Okunuş Tipografi Ayarları',fn:'Ayet Dipnotları',bk:'Yedekle / geri yükle',sec:'Güvenlik'};
+const AT={pin:'Yönetici paneli',menu:'Yönetici paneli',home:'Ana sayfa içeriği',arts:'Makaleler',artEdit:'Makale',ver:'Meal ayetleri',verEdit:'Ayet düzenle',ctr:'Yeni meal ekle',headf:'Konu Başlıkları',bio:'Yazar Biyografileri',bioEdit:'Biyografi',oku:'Okunuş Tipografi Ayarları',fn:'Ayet Dipnotları',bk:'Yedekle / geri yükle',sec:'Güvenlik'};
 function openAdmin(){
   closeSheet();
   $('#admin').classList.add('on');
@@ -1219,6 +1281,7 @@ const AVIEW={
       ['arts','doc','Makaleler',`${ARTS.length} makale · ${ADM.arts.add.length} eklenen · ${ADM.arts.del.length} silinen`],
       ['ver','pen','Meal ayetleri',`Ayet düzenle, eksik ayet ekle · ${nver} değişiklik`],
       ['ctr','book','Yeni meal ekle',`${ADM.ctr.length} meal`],
+      ['bio','pen','Yazar Biyografileri',`${BioAPI.list().filter(r=>r.hasBio).length} / ${BioAPI.list().length} yazarın biyografisi var`],
       ['headf','sliders','Konu Başlıkları','Ana Sayfa menüsü, sûre adları, makale başlıkları'],
       ['oku','sliders','Okunuş Tipografi Ayarları','Yazı tipi, boyut, kalınlık, satır aralığı'],
       ['fn','sliders','Ayet Dipnotları','Yazı boyutu'],
@@ -1231,6 +1294,42 @@ const AVIEW={
       const r=e.target.closest('.row');if(!r)return;
       if(r.dataset.v==='home')AD.work=null;
       adGo(r.dataset.v);
+    };
+  },
+  /* --- yazar biyografileri --- */
+  bio(a,body){
+    const rows=BioAPI.list(),fm=ts=>ts?new Date(ts).toLocaleDateString('tr-TR'):'';
+    body.innerHTML=`<div class="abar" style="margin-top:14px"><button class="btn sm" id="bnew">${ico('plus',16)} Yeni yazar</button></div>
+    <p class="hint" style="margin:0 20px 8px">${rows.filter(r=>r.hasBio).length} / ${rows.length} yazarın biyografisi var. Biyografi, meal bilgi kartında gösterilir.</p>
+    <div class="list">${rows.map(r=>`<button class="row" data-id="${esc(r.id)}"><span class="rt"><span class="rn" style="font-size:16px">${esc(r.name)}${r.hasBio?'<span class="tag">Var</span>':'<span class="tag" style="background:var(--surface);color:var(--muted)">Yok</span>'}</span><span class="rs">${r.linked?'Meal yazarı':'Ek yazar'}${r.updatedAt?' · güncelleme '+fm(r.updatedAt):''}</span></span><span class="go">${ico('right',18)}</span></button>`).join('')}</div>`;
+    $('#bnew').onclick=()=>adGo('bioEdit',{id:null});
+    body.onclick=e=>{const r=e.target.closest('.row[data-id]');if(r)adGo('bioEdit',{id:r.dataset.id})};
+  },
+  bioEdit({id},body){
+    const d=id?BioAPI.get(id):null;
+    if(id&&!d)throw new Error('Yazar bulunamadı');
+    const isNew=!id||!d.exists;   /* meal yazarı için ilk kayıt da "oluşturma"dır */
+    const name=d?d.name:'',text=d?(d.text||(isNew?d.hint:'')):'';
+    body.innerHTML=`<label class="fld" style="margin-top:14px"><span>Yazar adı</span><input class="inp" id="bn" maxlength="${BIO_MAX_NAME}" value="${esc(name)}" placeholder="Örn. Yaşar Nuri Öztürk"></label>
+    <div class="abar" style="margin:0 16px 8px;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" data-f="b"><b>K</b>alın</button><button class="btn ghost sm" data-f="i"><i>İ</i>talik</button><button class="btn ghost sm" data-f="h">Ara başlık</button></div>
+    <label class="fld"><span>Biyografi / Hakkında</span><textarea class="inp" id="bt" rows="14" maxlength="${BIO_MAX_TEXT}" placeholder="Paragraflar arasında boş satır bırak.">${esc(text)}</textarea></label>
+    <div class="fld" style="margin-top:-6px"><span>Önizleme</span><div class="bio" id="bp" style="border:1px dashed var(--line);border-radius:14px;padding:12px"></div></div>
+    <div id="berr" class="err"></div>
+    <div class="abar"><button class="btn" id="bsave">${isNew?'Kaydet':'Güncelle'}</button></div>`;
+    const ta=$('#bt'),pv=()=>{$('#bp').innerHTML=bioToHtml(ta.value)||'<p style="color:var(--muted)">Henüz metin yok.</p>'};
+    pv();ta.oninput=pv;
+    body.onclick=e=>{
+      const f=e.target.closest('[data-f]');if(!f)return;
+      const a=ta.selectionStart,b=ta.selectionEnd,sel=ta.value.slice(a,b),k=f.dataset.f;
+      const w=k==='b'?['**','**']:k==='i'?['*','*']:['## ',''];
+      ta.setRangeText(w[0]+(sel||'metin')+w[1],a,b,'end');ta.focus();pv();
+    };
+    $('#bsave').onclick=()=>{
+      try{
+        const v={name:$('#bn').value,text:ta.value};
+        if(isNew)BioAPI.create(Object.assign(v,d&&d.linked?{id}:{}));else BioAPI.update(id,v);
+        toast(isNew?'Biyografi eklendi':'Biyografi güncellendi');adBack();
+      }catch(err){$('#berr').textContent=err.message}
     };
   },
   /* --- ana sayfa --- */
@@ -1415,7 +1514,7 @@ const AVIEW={
   },
   /* --- yedek --- */
   bk(a,body){
-    const data=JSON.stringify({v:1,home:ADM.home||null,arts:ADM.arts,ver:ADM.ver,ctr:ADM.ctr,headFont:ADM.headFont||{},okuFont:clampOku(ADM.okuFont),fnFont:clampFn(ADM.fnFont)});
+    const data=JSON.stringify({v:1,home:ADM.home||null,arts:ADM.arts,ver:ADM.ver,ctr:ADM.ctr,headFont:ADM.headFont||{},okuFont:clampOku(ADM.okuFont),fnFont:clampFn(ADM.fnFont),bios:ADM.bios||{}});
     body.innerHTML=`<p class="hint" style="margin:14px 20px 10px">Aşağıdaki metni kopyalayıp güvenli bir yere kaydet. Yeni cihazda yapıştırıp geri yükleyebilirsin.</p>
     <label class="fld"><textarea class="inp" id="bkt" rows="10" spellcheck="false" style="font-family:monospace;font-size:12px">${esc(data)}</textarea></label>
     <div class="abar"><button class="btn sm" id="bkc">${ico('copy',16)} Kopyala</button><button class="btn ghost sm" id="bki">Geri yükle</button></div>`;
@@ -1427,6 +1526,7 @@ const AVIEW={
         ADM.home=Array.isArray(d.home)?sanitizeHome(d.home):null;
         ADM.arts={add:(d.arts&&d.arts.add)||[],edit:(d.arts&&d.arts.edit)||{},del:(d.arts&&d.arts.del)||[]};
         ADM.ver=d.ver||{};ADM.ctr=d.ctr||[];ADM.headFont=d.headFont||{};ADM.okuFont=clampOku(d.okuFont);ADM.fnFont=clampFn(d.fnFont);
+        ADM.bios={};if(d.bios&&typeof d.bios==='object')Object.values(d.bios).forEach(b=>{if(b&&typeof b.id==='string'&&typeof b.name==='string'&&typeof b.text==='string')ADM.bios[b.id]={id:b.id,name:b.name.slice(0,BIO_MAX_NAME),text:b.text.slice(0,BIO_MAX_TEXT),ts:+b.ts||Date.now()}});
         saveAdm();Object.keys(cache).forEach(k=>delete cache[k]);Object.keys(IDX).forEach(k=>delete IDX[k]);
         rebuildTr();rebuildArts();toast('Geri yüklendi');adRender();
       }catch(e){toast('Geçersiz yedek metni')}
