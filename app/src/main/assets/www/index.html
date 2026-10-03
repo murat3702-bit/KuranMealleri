@@ -593,7 +593,7 @@ async function renderHome(){
      PUT  /authors/:id    -> BioAPI.update(id,{name,text})
    Okuma herkese açıktır (meal bilgi kartında gösterilir); oluşturma ve güncelleme yalnızca
    yönetici paneli (PIN) açıkken yapılabilir. Silme bilinçli olarak tanımlanmadı. */
-const BIO_MAX_NAME=120,BIO_MAX_TEXT=20000;
+const BIO_MAX_NAME=120,BIO_MAX_TEXT=60000;
 const BioAPI=(()=>{
   const store=()=>(ADM.bios=ADM.bios&&typeof ADM.bios==='object'?ADM.bios:{});
   const needAdmin=()=>{if(!$('#admin').classList.contains('on'))throw new Error('Bu işlem için yönetici yetkisi gerekli')};
@@ -604,7 +604,7 @@ const BioAPI=(()=>{
     if(text.length>BIO_MAX_TEXT)throw new Error('Biyografi en fazla '+BIO_MAX_TEXT+' karakter olabilir');
     return {name,text};
   };
-  const row=(id,name,b,linked)=>({id,name:(b&&b.name)||name,hasBio:!!(b&&b.text&&b.text.trim()),linked,updatedAt:b?b.ts:null});
+  const row=(id,name,b,linked)=>({id,name:(b&&b.name)||name,hasBio:!!(b&&b.text&&b.text.trim())||!!(!b&&TRM[id]&&TRM[id].bio),linked,updatedAt:b?b.ts:null});
   return {
     list(){
       const st=store(),rows=TRS.map(t=>row(t.id,t.name,st[t.id],true));
@@ -614,7 +614,7 @@ const BioAPI=(()=>{
     get(id){
       const b=store()[id],t=TRM[id];
       if(!b&&!t)return null;
-      return {id,name:b?b.name:t.name,text:b?b.text:'',linked:!!t,exists:!!b,updatedAt:b?b.ts:null,hint:t?(t.desc||''):''};
+      return {id,name:b?b.name:t.name,text:b?b.text:(t&&t.bio?bioHtmlToText(t.bio):''),linked:!!t,exists:!!b,builtin:!b&&!!(t&&t.bio),updatedAt:b?b.ts:null,hint:t?(t.desc||''):''};
     },
     create(d){
       needAdmin();const v=clean(d),st=store();
@@ -643,6 +643,16 @@ function bioToHtml(t){
   const inl=x=>esc(x).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>');
   return String(t||'').split(/\n{2,}/).map(b=>b.trim()).filter(Boolean).map(b=>
     /^##\s+/.test(b)?`<h3>${inl(b.replace(/^##\s+/,''))}</h3>`:`<p>${inl(b).replace(/\n/g,'<br>')}</p>`).join('');
+}
+function bioHtmlToText(h){
+  const D=x=>dec(String(x).replace(/<[^>]+>/g,''));
+  return String(h||'').replace(/\r/g,'')
+    .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi,(m,x)=>'\n\n## '+D(x.replace(/<br\s*\/?>/gi,' '))+'\n\n')
+    .replace(/<\/p>/gi,'\n\n').replace(/<br\s*\/?>/gi,'\n')
+    .replace(/<(b|strong)>([\s\S]*?)<\/\1>/gi,(m,t,x)=>'**'+D(x)+'**')
+    .replace(/<(i|em)>([\s\S]*?)<\/\1>/gi,(m,t,x)=>'*'+D(x)+'*')
+    .replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#0?39;/g,"'").replace(/&amp;/g,'&')
+    .replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
 }
 function openTrInfo(id){
   const t=TRM[id];
